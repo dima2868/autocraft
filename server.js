@@ -12,18 +12,34 @@ app.use(express.static('public'));
 app.use('/textures', express.static('output/textures'));
 
 // ── Static data ───────────────────────────────────────────────────────────
-const recipesDB    = JSON.parse(fs.readFileSync('./output/recipes_db.json',    'utf-8'));
-const recipesIndex = JSON.parse(fs.readFileSync('./output/recipes_index.json', 'utf-8'));
-const itemTextures = JSON.parse(fs.readFileSync('./output/item_textures.json', 'utf-8'));
+let recipesDB = {};
+let recipesIndex = { by_type: {}, by_namespace: {} };
+let itemTextures = {};
+
+const recipesDbPath = path.join(__dirname, 'output', 'recipes_db.json');
+const recipesIndexPath = path.join(__dirname, 'output', 'recipes_index.json');
+const itemTexturesPath = path.join(__dirname, 'output', 'item_textures.json');
+
+try {
+  if (fs.existsSync(recipesDbPath)) recipesDB = JSON.parse(fs.readFileSync(recipesDbPath, 'utf-8'));
+} catch (e) { console.error('[Server] Error loading recipes_db.json:', e.message); }
+
+try {
+  if (fs.existsSync(recipesIndexPath)) recipesIndex = JSON.parse(fs.readFileSync(recipesIndexPath, 'utf-8'));
+} catch (e) { console.error('[Server] Error loading recipes_index.json:', e.message); }
+
+try {
+  if (fs.existsSync(itemTexturesPath)) itemTextures = JSON.parse(fs.readFileSync(itemTexturesPath, 'utf-8'));
+} catch (e) { console.error('[Server] Error loading item_textures.json:', e.message); }
 
 // ── Persistent: custom recipes ────────────────────────────────────────────
-const CUSTOM_FILE = './custom_recipes.json';
+const CUSTOM_FILE = path.join(__dirname, 'custom_recipes.json');
 let customRecipes = {};
 try { if (fs.existsSync(CUSTOM_FILE)) customRecipes = JSON.parse(fs.readFileSync(CUSTOM_FILE, 'utf-8')); } catch {}
 const saveCustom = () => { try { fs.writeFileSync(CUSTOM_FILE, JSON.stringify(customRecipes, null, 2)); } catch {} };
 
 // ── Persistent: craft log ─────────────────────────────────────────────────
-const LOG_FILE = './craft_log.json';
+const LOG_FILE = path.join(__dirname, 'craft_log.json');
 let craftLog = [];
 try { if (fs.existsSync(LOG_FILE)) craftLog = JSON.parse(fs.readFileSync(LOG_FILE, 'utf-8')); } catch {}
 const saveLog = () => { try { fs.writeFileSync(LOG_FILE, JSON.stringify(craftLog.slice(-500), null, 2)); } catch {} };
@@ -336,8 +352,8 @@ function buildRecipeData(resultItem, resultCount, recipeType, grid) {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n🚀 AutoCraft API on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n🚀 AutoCraft API on http://0.0.0.0:${PORT}`);
   console.log(`   ME Terminal:    /me.html`);
   console.log(`   Craft Manager:  /crafts.html\n`);
 });

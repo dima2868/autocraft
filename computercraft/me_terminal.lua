@@ -1,11 +1,12 @@
--- ME Terminal Bridge v3.1 - with remote logging to website
-local API_URL       = "https://web-production-bf6e3.up.railway.app"
+-- ME Terminal Bridge v3.2 - Railway + Barrel_3/Barrel_4/Vault_4
+local API_URL       = "https://me-terminal-production.up.railway.app"
 local CRAFTER_NAME  = "left"
 local BUFFER_NAME   = "chest_4"
-local OUTPUT_NAME   = "barrel_1"
+local OUTPUT_NAME   = "barrel_4"
+local INPUT_NAME    = "barrel_3"
 local REDSTONE_SIDE = "top"
 local PRESS_DEPOTS  = {"depot_5","depot_6","depot_7"}
-local VAULT_NAMES   = {"item_vault_5","item_vault_6","item_vault_7"}
+local VAULT_NAMES   = {"item_vault_4","item_vault_5","item_vault_6","item_vault_7"}
 local SYNC_INTERVAL = 2
 
 local HEADERS = {
@@ -14,7 +15,7 @@ local HEADERS = {
     ["ngrok-skip-browser-warning"]="true"
 }
 
-local EXCLUDED = {[CRAFTER_NAME]=true,[BUFFER_NAME]=true,[OUTPUT_NAME]=true}
+local EXCLUDED = {[CRAFTER_NAME]=true,[BUFFER_NAME]=true,[OUTPUT_NAME]=true,[INPUT_NAME]=true}
 for _,d in ipairs(PRESS_DEPOTS) do EXCLUDED[d]=true end
 
 -- ══ Remote log ══════════════════════════════════════════════════════════
@@ -85,16 +86,26 @@ end
 
 -- ══ HTTP ═════════════════════════════════════════════════════════════════
 function httpGet(path)
-    local ok,r = pcall(http.get, API_URL..path, HEADERS)
+    local url = API_URL .. path
+    local ok, r = pcall(http.get, url, HEADERS)
+    if not ok or not r then
+        local httpUrl = url:gsub("^https:", "http:")
+        ok, r = pcall(http.get, httpUrl, HEADERS)
+    end
     if not ok or not r then return nil end
-    local b=r.readAll(); r.close()
+    local b = r.readAll(); r.close()
     return textutils.unserialiseJSON(b)
 end
 
-function httpPost(path,data)
+function httpPost(path, data)
     local body = type(data)=="string" and data or textutils.serialiseJSON(data)
-    local ok,r = pcall(http.post, API_URL..path, body, HEADERS)
-    if ok and r then local b=r.readAll(); r.close(); return textutils.unserialiseJSON(b) end
+    local url = API_URL .. path
+    local ok, r = pcall(http.post, url, body, HEADERS)
+    if not ok or not r then
+        local httpUrl = url:gsub("^https:", "http:")
+        ok, r = pcall(http.post, url, body, HEADERS)
+    end
+    if ok and r then local b = r.readAll(); r.close(); return textutils.unserialiseJSON(b) end
     return nil
 end
 

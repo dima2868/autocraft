@@ -10,7 +10,7 @@ print("║  To: minecraft:chest_4")
 print("╚════════════════════════════════════════╝\n")
 
 -- Find vault and chest
-local vaultName = "create:item_vault_7"
+local vaultName = "create:item_vault_7в"
 local chestName = "minecraft:chest_4"
 
 print("Step 1: Wrapping peripherals...")

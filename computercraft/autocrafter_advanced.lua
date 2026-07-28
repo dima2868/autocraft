@@ -3,7 +3,7 @@
 -- Manages mechanical crafters, presses, and depot routing
 -- ══════════════════════════════════════════════════════════════════════════
 
-local API_URL = "https://web-production-bf6e3.up.railway.app"
+local API_URL = "https://me-terminal-production.up.railway.app"
 
 -- HTTP headers for Railway bypass
 local HTTP_HEADERS = {
@@ -81,8 +81,13 @@ end
 -- ══════════════════════════════════════════════════════════════════════════
 
 function apiGet(endpoint)
-    local response = http.get(API_URL .. endpoint, HTTP_HEADERS)
-    if not response then return nil, "Connection failed" end
+    local url = API_URL .. endpoint
+    local ok, response = pcall(http.get, url, HTTP_HEADERS)
+    if not ok or not response then
+        local httpUrl = url:gsub("^https:", "http:")
+        ok, response = pcall(http.get, httpUrl, HTTP_HEADERS)
+    end
+    if not ok or not response then return nil, "Connection failed" end
     local data = response.readAll()
     response.close()
     return textutils.unserialiseJSON(data)
