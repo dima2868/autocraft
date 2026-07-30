@@ -122,6 +122,38 @@
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1999;display:none}
 .overlay.show{display:block}
 .count-badge{background:var(--brass);color:var(--bg-void);padding:2px 7px;border-radius:3px;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace}
+
+/* ── Setup tab ─────────────────────────────────────────────────── */
+.setup-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.crafter-card{background:var(--bg-panel);border:1px solid var(--rivet);border-radius:8px;padding:16px;position:relative;transition:border-color .15s}
+.crafter-card.enabled{border-color:var(--brass-dim)}
+.crafter-card.disabled{opacity:.6}
+.crafter-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--rivet)}
+.crafter-card-title{font-family:'Rajdhani',sans-serif;font-size:15px;font-weight:700;letter-spacing:1px;color:var(--brass-bright)}
+.crafter-toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:10px;color:var(--parchment-faint);font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:.5px}
+.crafter-toggle input{width:14px;height:14px;accent-color:var(--brass);cursor:pointer}
+.setup-field{margin-bottom:8px}
+.setup-field label{display:block;font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--parchment-faint);font-family:'JetBrains Mono',monospace;margin-bottom:3px}
+.setup-field select,.setup-field input{width:100%;padding:7px 10px;background:var(--bg-slot);border:1px solid var(--rivet);border-radius:4px;color:var(--parchment);font-family:'JetBrains Mono',monospace;font-size:11px;outline:none}
+.setup-field select:focus,.setup-field input:focus{border-color:var(--brass)}
+.setup-field select option{background:var(--bg-panel)}
+.setup-row-2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.barrel-pair-label{font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--parchment-faint);font-family:'JetBrains Mono',monospace;margin-bottom:3px}
+.barrel-pair-label .tag{display:inline-block;padding:1px 5px;border-radius:2px;font-size:8px;margin-left:4px}
+.barrel-pair-label .tag.in{background:#1a3a24;color:var(--verdigris)}
+.barrel-pair-label .tag.out{background:#3a1a14;color:var(--rust)}
+.vault-box{background:var(--bg-panel);border:1px solid var(--brass-dim);border-radius:8px;padding:16px;margin-top:16px}
+.vault-box .setup-field{max-width:400px}
+.setup-actions{display:flex;gap:10px;margin-top:16px;align-items:center}
+.setup-status{font-size:11px;color:var(--parchment-faint);font-family:'JetBrains Mono',monospace}
+.periph-count{display:inline-block;padding:2px 8px;background:var(--bg-slot);border:1px solid var(--rivet);border-radius:10px;font-size:10px;color:var(--brass-bright);font-family:'JetBrains Mono',monospace;margin-left:8px}
+.crafter-online{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--rust);margin-left:6px}
+.crafter-online.on{background:var(--verdigris);box-shadow:0 0 6px var(--verdigris)}
+
+/* ── Shapeless slots (builder) ──────────────────────────────────── */
+#shapelessSlots .craft-slot{background:var(--bg-slot)}
+#shapelessSlots .craft-slot:hover{border-color:var(--brass)}
+#shapelessSlots .craft-slot img{width:100%;height:100%;image-rendering:pixelated}
 </style>
 </head>
 <body>
@@ -158,6 +190,7 @@
   <div class="tab" onclick="switchTab('queue')">⏳ Queue</div>
   <div class="tab" onclick="switchTab('history')">📜 History</div>
   <div class="tab" onclick="switchTab('cclog')" id="tabCclog">🖥 CC Log</div>
+  <div class="tab" onclick="switchTab('setup')" id="tabSetup">⚙ Setup</div>
 </div>
 
 <!-- ═══ BUILDER ═══ -->
@@ -179,38 +212,84 @@
     <div class="builder-right">
       <div class="section-title">Recipe Builder</div>
 
-      <!-- Type selector -->
-      <div class="form-row" style="max-width:320px">
-        <label>Recipe Type</label>
+      <!-- Machine type selector -->
+      <div class="form-row" style="max-width:420px">
+        <label>Machine / Type</label>
         <select id="recipeType" onchange="onTypeChange()">
-          <option value="minecraft:crafting_shaped">Crafting Table 3×3</option>
-          <option value="create:pressing">Create Pressing</option>
-          <option value="create:cutting">Create Cutting</option>
-          <option value="create:milling">Create Milling</option>
-          <option value="create:crushing">Create Crushing</option>
+          <optgroup label="⛏ Vanilla">
+            <option value="minecraft:crafting_shaped">Crafter 3×3 (Vanilla)</option>
+            <option value="minecraft:crafting_shapeless">Crafter Shapeless</option>
+          </optgroup>
+          <optgroup label="⚙ Create">
+            <option value="create:pressing">Mechanical Press</option>
+            <option value="create:mixing">Mechanical Mixer (2 ingredients)</option>
+            <option value="create:milling">Millstone</option>
+            <option value="create:crushing">Crushing Wheels</option>
+            <option value="create:cutting">Mechanical Saw / Cutting</option>
+            <option value="create:sandpaper_polishing">Sandpaper Polishing</option>
+            <option value="create:deploying">Deployer</option>
+            <option value="create:spout_filling">Spout Filling</option>
+          </optgroup>
+          <optgroup label="🏗 Other">
+            <option value="create:mechanical_crafting">Mechanical Crafter (Create 3×3)</option>
+          </optgroup>
         </select>
       </div>
 
-      <!-- Grid + arrow + result -->
-      <div class="grid-area">
-        <!-- 3×3 grid -->
-        <div id="gridSection">
+      <!-- Input area: changes based on machine type -->
+      <div class="grid-area" id="builderGridArea">
+
+        <!-- 3×3 grid for crafting_shaped / mechanical_crafting -->
+        <div id="grid3x3Section">
           <div style="font-size:10px;color:var(--parchment-faint);margin-bottom:6px;font-family:'JetBrains Mono',monospace">
             Drag from Storage · Click to search · Right-click to clear
           </div>
           <div class="craft-grid" id="craftGrid"></div>
         </div>
 
-        <!-- Single ingredient (press) -->
-        <div id="pressSection" style="display:none">
-          <div style="font-size:10px;color:var(--parchment-faint);margin-bottom:6px;font-family:'JetBrains Mono',monospace">Ingredient</div>
-          <div class="craft-slot" id="pressSlot"
+        <!-- Single ingredient: press, mill, crush, cut, sandpaper, spout, deployer -->
+        <div id="singleSection" style="display:none">
+          <div style="font-size:10px;color:var(--parchment-faint);margin-bottom:6px;font-family:'JetBrains Mono',monospace">Ingredient (item on belt / depot)</div>
+          <div class="craft-slot" id="singleSlot"
             style="width:64px;height:64px"
-            onclick="openSlotPicker(4)"
+            onclick="openSlotPicker(-2)"
             ondragover="event.preventDefault()"
-            ondrop="event.preventDefault();if(dragItemId){builderGrid[4]=dragItemId;document.getElementById('pressSlot').innerHTML=itemImg(dragItemId);updatePreview();}">
+            ondrop="event.preventDefault();if(dragItemId){setSingleIngredient(dragItemId);updatePreview();}">
             <span style="font-size:20px">+</span>
           </div>
+        </div>
+
+        <!-- Multi-slot for mixing (2 ingredients) -->
+        <div id="mixingSection" style="display:none">
+          <div style="font-size:10px;color:var(--parchment-faint);margin-bottom:6px;font-family:'JetBrains Mono',monospace">Ingredients (up to 2 items mixed on belt)</div>
+          <div style="display:flex;gap:8px">
+            <div>
+              <div style="font-size:9px;color:var(--brass-dim);margin-bottom:3px;font-family:'JetBrains Mono',monospace">Slot 1</div>
+              <div class="craft-slot" id="mixSlot1" style="width:64px;height:64px"
+                onclick="openSlotPicker(-3)"
+                ondragover="event.preventDefault()"
+                ondrop="event.preventDefault();if(dragItemId){setMixIngredient(0,dragItemId);updatePreview();}">
+                <span style="font-size:20px">+</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:20px;color:var(--brass-dim);padding-bottom:16px">+</div>
+            <div>
+              <div style="font-size:9px;color:var(--brass-dim);margin-bottom:3px;font-family:'JetBrains Mono',monospace">Slot 2</div>
+              <div class="craft-slot" id="mixSlot2" style="width:64px;height:64px"
+                onclick="openSlotPicker(-4)"
+                ondragover="event.preventDefault()"
+                ondrop="event.preventDefault();if(dragItemId){setMixIngredient(1,dragItemId);updatePreview();}">
+                <span style="font-size:20px">+</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shapeless: up to 9 loose ingredients -->
+        <div id="shapelessSection" style="display:none">
+          <div style="font-size:10px;color:var(--parchment-faint);margin-bottom:6px;font-family:'JetBrains Mono',monospace">Ingredients (any order, up to 9) · Click + to add slot</div>
+          <div id="shapelessSlots" style="display:flex;flex-wrap:wrap;gap:6px;max-width:220px"></div>
+          <button class="btn btn-sm" style="margin-top:8px;background:var(--bg-slot);border:1px solid var(--rivet);color:var(--parchment-dim)" onclick="addShapelessSlot()">+ Add ingredient</button>
         </div>
 
         <div class="arrow-sym">→</div>
@@ -279,6 +358,36 @@
     </div>
   </div>
   <div id="logList" class="log-list"></div>
+</div>
+
+<!-- ═══ SETUP ═══ -->
+<div class="tab-content" id="tab-setup">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <div class="section-title" style="margin-bottom:0">Autocrafter Setup</div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <span class="setup-status">Peripherals online:<span class="periph-count" id="setupPeriphCount">0</span></span>
+      <span class="setup-status" id="setupPeriphAt">never</span>
+    </div>
+  </div>
+  <div class="setup-grid" id="crafterCards"></div>
+
+  <div class="vault-box">
+    <div class="section-title" style="margin-bottom:10px">Final Storage (Vault)</div>
+    <div class="setup-field">
+      <label>Output vault (where finished items go)</label>
+      <select id="vaultSelect"></select>
+    </div>
+    <label class="crafter-toggle">
+      <input type="checkbox" id="autoMoveToVault" checked>
+      Auto-move finished items from output barrels → vault
+    </label>
+  </div>
+
+  <div class="setup-actions">
+    <button class="btn btn-primary" onclick="saveConfig()">⚙ Save Configuration</button>
+    <button class="btn btn-sm" style="background:var(--bg-slot);border:1px solid var(--rivet);color:var(--parchment)" onclick="reloadPeriph()">↻ Refresh Peripherals</button>
+    <span class="setup-status" id="setupSaved"></span>
+  </div>
 </div>
 
 </div><!-- me-container -->

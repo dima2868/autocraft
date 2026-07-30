@@ -909,6 +909,71 @@ body {
     to { opacity: 0; transform: translateX(20px); }
 }
 
+/* ══════════════════════════════════════════════════════════════
+   Inventory empty state
+   ══════════════════════════════════════════════════════════════ */
+
+.no-items::before {
+    content: '📂';
+    display: block;
+    font-size: 36px;
+    margin-bottom: 12px;
+    opacity: 0.35;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Smooth card appearance
+   ══════════════════════════════════════════════════════════════ */
+
+.me-item-grid > .item-card {
+    animation: cardFadeIn 0.2s ease both;
+}
+
+@keyframes cardFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Setup tab polish
+   ══════════════════════════════════════════════════════════════ */
+
+.crafter-card {
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.crafter-card.enabled:hover {
+    border-color: var(--brass);
+    box-shadow: 0 0 12px rgba(201, 147, 46, 0.12);
+}
+.crafter-card.disabled {
+    filter: grayscale(0.3);
+}
+.crafter-card.disabled:hover {
+    filter: grayscale(0);
+}
+
+.vault-box {
+    transition: border-color 0.2s;
+}
+.vault-box:hover {
+    border-color: var(--brass);
+}
+
+/* Online indicator pulse for crafter cards */
+.crafter-online.on {
+    animation: onlinePulse 2s ease infinite;
+}
+@keyframes onlinePulse {
+    0%, 100% { box-shadow: 0 0 4px var(--verdigris); }
+    50%      { box-shadow: 0 0 10px var(--verdigris); }
+}
+
+/* Scrollbar polish for tab content */
+.tab-content::-webkit-scrollbar { width: 8px; }
+.tab-content::-webkit-scrollbar-track { background: var(--bg-slot); }
+.tab-content::-webkit-scrollbar-thumb { background: var(--brass-dim); border-radius: 4px; }
+.tab-content::-webkit-scrollbar-thumb:hover { background: var(--brass); }
+
 /* Focus visibility for accessibility */
 button:focus-visible,
 input:focus-visible {

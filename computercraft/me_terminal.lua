@@ -1,13 +1,14 @@
--- ME Terminal Bridge v3.2 - Railway + Barrel_3/Barrel_4/Vault_4
-local API_URL       = "https://me-terminal-production.up.railway.app"
-local CRAFTER_NAME  = "left"
-local BUFFER_NAME   = "chest_4"
-local OUTPUT_NAME   = "barrel_4"
-local INPUT_NAME    = "barrel_3"
-local REDSTONE_SIDE = "top"
-local PRESS_DEPOTS  = {"depot_5","depot_6","depot_7"}
-local VAULT_NAMES   = {"item_vault_4","item_vault_5","item_vault_6","item_vault_7"}
-local SYNC_INTERVAL = 2
+-- ══════════════════════════════════════════════════════════════════════════
+-- ME Terminal Bridge v4.0
+-- Multi-crafter (4× vanilla minecraft:crafter) · 2 input + 2 output barrels
+-- Reads hardware config from the web server · reports peripherals
+-- Output barrel → (optional) item_vault as final storage
+-- ══════════════════════════════════════════════════════════════════════════
+
+local API_URL = "https://me-terminal-production.up.railway.app"  -- ← change to your URL
+local SYNC_INTERVAL = 2          -- inventory push every N seconds
+local PERIPH_REPORT_INTERVAL = 10 -- peripheral report every N seconds
+local CRAFTER_POLL_INTERVAL = 3   -- each worker polls queue every N seconds
 
 local HEADERS = {
     ["Content-Type"]="application/json",
@@ -15,12 +16,11 @@ local HEADERS = {
     ["ngrok-skip-browser-warning"]="true"
 }
 
-local EXCLUDED = {[CRAFTER_NAME]=true,[BUFFER_NAME]=true,[OUTPUT_NAME]=true,[INPUT_NAME]=true}
-for _,d in ipairs(PRESS_DEPOTS) do EXCLUDED[d]=true end
+-- Runtime config (fetched from /api/config)
+local CONFIG = { crafters={}, vault="", autoMoveToVault=true }
 
 -- ══ Remote log ══════════════════════════════════════════════════════════
 local logBuf = {}
-
 local COLOR = {
     info=colors.white, ok=colors.lime, warn=colors.orange,
     error=colors.red,  cyan=colors.cyan, yellow=colors.yellow
@@ -45,43 +45,45 @@ function flushLog()
     end)
 end
 
--- ══ Storage scan ════════════════════════════════════════════════════════
-function findAllStorage()
-    local devices,seen = {},{}
-    for _,name in ipairs(peripheral.getNames()) do
-        if not seen[name] and not EXCLUDED[name] and not name:match("^depot_") then
-            local pt = peripheral.getType(name)
-            if pt and (pt:find("vault") or pt:find("chest") or pt:find("barrel") or pt=="inventory") then
-                local p = peripheral.wrap(name)
-                if p and p.list then
-                    table.insert(devices,{name=name,type=pt,p=p}); seen[name]=true
-                end
-            end
-        end
-    end
-    return devices
+-- ══ JSON encoding (manual, robust — avoids textutils quirks) ════════════
+-- Encodes a value to a JSON string. Handles nil/string/number/boolean/array/table.
+local function jsonEscape(s)
+    s = tostring(s)
+    s = s:gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n'):gsub('\r','\\r'):gsub('\t','\\t')
+    return s
 end
 
-function scanInventory()
-    local inv,totalItems,totalStacks = {},0,0
-    local devs = findAllStorage()
-    for _,d in ipairs(devs) do
-        local ok,items = pcall(function() return d.p.list() end)
-        if ok and items then
-            for slot,item in pairs(items) do
-                local id = item.name
-                if not inv[id] then
-                    inv[id]={id=id,name=id:match(":(.+)") or id,
-                             namespace=id:match("^(.+):") or "minecraft",
-                             totalCount=0,locations={}}
-                end
-                inv[id].totalCount = inv[id].totalCount + item.count
-                table.insert(inv[id].locations,{device=d.name,slot=slot,count=item.count})
-                totalItems=totalItems+item.count; totalStacks=totalStacks+1
+local function isIntArray(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    if n == 0 then return true end  -- empty table → treat as array []
+    for i = 1, n do if t[i] == nil then return false end end
+    return true
+end
+
+local function jsonEncode(v)
+    local tv = type(v)
+    if v == nil then return "null"
+    elseif tv == "string" then return '"'..jsonEscape(v)..'"'
+    elseif tv == "number" then
+        if v ~= v or v == math.huge or v == -math.huge then return "0" end
+        return tostring(v)
+    elseif tv == "boolean" then return v and "true" or "false"
+    elseif tv ~= "table" then return "null"
+    end
+    if isIntArray(v) then
+        local parts = {}
+        for i = 1, #v do parts[i] = jsonEncode(v[i]) end
+        return "["..table.concat(parts, ",").."]"
+    else
+        local parts = {}
+        for k, val in pairs(v) do
+            if type(k) == "string" then
+                parts[#parts+1] = '"'..jsonEscape(k)..'":'..jsonEncode(val)
             end
         end
+        return "{"..table.concat(parts, ",").."}"
     end
-    return inv,{totalItems=totalItems,totalStacks=totalStacks,storageDevices=#devs}
 end
 
 -- ══ HTTP ═════════════════════════════════════════════════════════════════
@@ -98,106 +100,132 @@ function httpGet(path)
 end
 
 function httpPost(path, data)
-    local body = type(data)=="string" and data or textutils.serialiseJSON(data)
+    local body = type(data)=="string" and data or jsonEncode(data)
     local url = API_URL .. path
     local ok, r = pcall(http.post, url, body, HEADERS)
     if not ok or not r then
         local httpUrl = url:gsub("^https:", "http:")
-        ok, r = pcall(http.post, url, body, HEADERS)
+        ok, r = pcall(http.post, httpUrl, body, HEADERS)
     end
-    if ok and r then local b = r.readAll(); r.close(); return textutils.unserialiseJSON(b) end
+    if ok and r then local b = r.readAll(); r.close()
+        if b and #b > 0 then return textutils.unserialiseJSON(b) end
+        return { ok = true }
+    end
     return nil
 end
 
-function pushInventory(inv,stats)
-    local items={}
-    for _,d in pairs(inv) do
-        table.insert(items,{id=d.id,name=d.name,namespace=d.namespace,
-                            count=d.totalCount,locations=#d.locations})
+-- ══ Config & peripherals ═════════════════════════════════════════════════
+function loadConfig()
+    local d = httpGet("/api/config")
+    if d and d.config then
+        CONFIG = d.config
+        log("Config loaded: "..#CONFIG.crafters.." crafters, vault="..(CONFIG.vault or "none"),"cyan")
+        return true
     end
-    table.sort(items,function(a,b) return a.count>b.count end)
-    httpPost("/api/inventory",{
-        computerId=os.getComputerID(),timestamp=os.epoch("utc"),
-        stats=stats,items=items
-    })
+    log("WARN: could not load config from server","warn")
+    return false
 end
 
-function getNextJob()
-    local d=httpGet("/api/queue/next")
-    return d and d.job
-end
-
-function reportDone(id,ok,err)
-    local ep = ok and "/api/queue/"..id.."/complete" or "/api/queue/"..id.."/fail"
-    httpPost(ep, ok and {} or {error=err or "unknown"})
-end
-
-function getRecipe(itemId)
-    local d=httpGet("/api/recipes/"..itemId:gsub(":","__"))
-    if d and d.recipes and #d.recipes>0 then return d.recipes[1] end
-    return nil
-end
-
--- ══ Recipe parsing ═══════════════════════════════════════════════════════
-local function extractIng(ing)
-    if type(ing)=="string" then return ing end
-    if type(ing)~="table" then return nil end
-    if ing.item then return ing.item end
-    if ing.tag  then return "#"..ing.tag end
-    if ing[1]   then return extractIng(ing[1]) end
-    return nil
-end
-
-function parseGrid(recipe)
-    local t=recipe.type; local data=recipe.data or {}
-    if t=="minecraft:crafting_shaped" or t=="create:mechanical_crafting" then
-        local pat=data.pattern or {}; local key=data.key or {}; local grid={}
-        for row=1,3 do for col=1,3 do
-            local idx=(row-1)*3+col
-            local ch=pat[row] and pat[row]:sub(col,col) or " "
-            if ch~=" " and key[ch] then grid[idx]=extractIng(key[ch]) end
-        end end
-        return grid,"crafter"
-    elseif recipe.custom then
-        local raw=recipe.grid or {}; local grid={}
-        for i=1,9 do local v=raw[i]; grid[i]=(v~=nil and v~="") and v or nil end
-        return grid,"crafter"
-    elseif t=="create:pressing" or t=="create:cutting" or t=="create:milling"
-        or t=="create:crushing" or t=="create:sandpaper_polishing" then
-        local ings=data.ingredients or {}; local grid={}
-        grid[5]=extractIng(ings[1] or ings)
-        return grid,"press"
+function reportPeripherals()
+    local list = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        local pt = peripheral.getType(name)
+        table.insert(list, { name = name, type = pt or "unknown" })
     end
-    return nil,"unknown"
+    httpPost("/api/peripherals", { peripherals = list })
+    return #list
 end
 
--- ══ Item search ════════════════════════════════════════════════════════════
-function findItem(itemId)
-    local isTag=itemId:sub(1,1)=="#"; local tag=isTag and itemId:sub(2) or nil
-    local best=nil
-    for _,dev in ipairs(findAllStorage()) do
-        local ok,items=pcall(function() return dev.p.list() end)
+-- ══ Storage scan ════════════════════════════════════════════════════════
+function findAllStorage()
+    local devices = {}
+    for _, name in ipairs(peripheral.getNames()) do
+        local pt = peripheral.getType(name)
+        if pt and (pt:find("vault") or pt:find("chest") or pt:find("barrel") or pt == "inventory") then
+            local p = peripheral.wrap(name)
+            if p and p.list then
+                table.insert(devices, { name=name, type=pt, p=p })
+            end
+        end
+    end
+    return devices
+end
+
+function scanInventory()
+    local inv, totalItems, totalStacks = {}, 0, 0
+    for _, d in ipairs(findAllStorage()) do
+        local ok, items = pcall(function() return d.p.list() end)
         if ok and items then
-            for slot,item in pairs(items) do
+            for slot, item in pairs(items) do
+                local id = item.name
+                if not inv[id] then
+                    inv[id] = {
+                        id=id,
+                        name = id:match(":(.+)") or id,
+                        namespace = id:match("^(.+):") or "minecraft",
+                        totalCount = 0,
+                        locations = 0
+                    }
+                end
+                inv[id].totalCount = inv[id].totalCount + item.count
+                inv[id].locations = inv[id].locations + 1
+                totalItems = totalItems + item.count
+                totalStacks = totalStacks + 1
+            end
+        end
+    end
+    return inv, { totalItems=totalItems, totalStacks=totalStacks, storageDevices=#findAllStorage() }
+end
+
+function pushInventory(inv, stats)
+    local items = {}
+    for _, d in pairs(inv) do
+        table.insert(items, {
+            id=d.id, name=d.name, namespace=d.namespace,
+            count=d.totalCount, locations=d.locations
+        })
+    end
+    table.sort(items, function(a,b) return a.count > b.count end)
+    local resp = httpPost("/api/inventory", {
+        computerId=os.getComputerID(),
+        timestamp=os.epoch("utc"),
+        stats=stats,
+        items=items
+    })
+    log("Inventory pushed: "..#items.." items, totalItems="..(stats.totalItems or 0))
+    return resp
+end
+
+-- ══ Item search (direct id or #tag resolution) ══════════════════════════
+function findItem(itemId)
+    local isTag = itemId:sub(1,1) == "#"
+    local tag = isTag and itemId:sub(2) or nil
+    local best = nil
+    for _, dev in ipairs(findAllStorage()) do
+        local ok, items = pcall(function() return dev.p.list() end)
+        if ok and items then
+            for slot, item in pairs(items) do
                 if not isTag then
-                    if item.name==itemId then return dev.name,slot,item.count end
+                    if item.name == itemId then return dev.name, slot, item.count end
                 else
-                    local sim=tag:gsub("^c:",""):gsub("^forge:","")
-                    local base=sim:match("([^/]+)$") or sim
-                    local pats={base}
-                    if sim:match("^ingots/") then pats={base.."_ingot"}
-                    elseif sim:match("^plates/") or sim:match("^sheets/") then pats={base.."_plate",base.."_sheet"}
-                    elseif sim:match("^nuggets/") then pats={base.."_nugget"}
-                    elseif sim:match("^dusts/") then pats={base.."_dust"}
-                    elseif sim:match("^gears/") then pats={base.."_gear"}
-                    elseif sim:match("^rods/") then pats={base.."_rod"} end
-                    local ibase=item.name:match(":(.+)") or item.name
-                    for _,pat in ipairs(pats) do
-                        if ibase==pat or ibase:match(pat.."$") then
-                            local prio=item.name:match("^minecraft:") and 1
-                                    or item.name:match("^create:") and 2 or 10
-                            if not best or prio<best.prio then
-                                best={storage=dev.name,slot=slot,count=item.count,prio=prio}
+                    -- Heuristic tag match: c:ingots/iron -> *_ingot ending in "iron"
+                    local sim = tag:gsub("^c:",""):gsub("^forge:","")
+                    local base = sim:match("([^/]+)$") or sim
+                    local pats = { base }
+                    if sim:match("^ingots/") then pats = { base.."_ingot" }
+                    elseif sim:match("^plates/") or sim:match("^sheets/") then pats = { base.."_plate", base.."_sheet" }
+                    elseif sim:match("^nuggets/") then pats = { base.."_nugget" }
+                    elseif sim:match("^dusts/") then pats = { base.."_dust" }
+                    elseif sim:match("^gears/") then pats = { base.."_gear" }
+                    elseif sim:match("^rods/") or sim:match("^sticks/") then pats = { base.."_rod", base.."_stick" }
+                    end
+                    local ibase = item.name:match(":(.+)") or item.name
+                    for _, pat in ipairs(pats) do
+                        if ibase == pat or ibase:match(pat.."$") then
+                            local prio = item.name:match("^minecraft:") and 1
+                                or item.name:match("^create:") and 2 or 10
+                            if not best or prio < best.prio then
+                                best = { storage=dev.name, slot=slot, count=item.count, prio=prio }
                             end
                             break
                         end
@@ -206,46 +234,48 @@ function findItem(itemId)
             end
         end
     end
-    if best then return best.storage,best.slot,best.count end
+    if best then return best.storage, best.slot, best.count end
     return nil
 end
 
--- ══ Transfer helpers ══════════════════════════════════════════════════════
-function moveViaBuffer(srcName,srcSlot,qty,targetName,targetSlot)
-    local buf=peripheral.wrap(BUFFER_NAME)
-    if not buf then return false,"no buffer" end
-    local short=srcName:match("item_vault_%d+") or srcName:match("chest_%d+")
-             or srcName:match("([^:]+)$") or srcName
-    local ok,n=pcall(function() return buf.pullItems(short,srcSlot,qty) end)
-    if not ok or not n or n==0 then
-        ok,n=pcall(function() return buf.pullItems(srcName,srcSlot,qty) end)
+-- ══ Transfer helpers ═════════════════════════════════════════════════════
+-- Move 1 item from storage into a target crafter slot.
+function moveItemToSlot(targetName, targetSlot, itemId)
+    local src, srcSlot = findItem(itemId)
+    if not src then return false, "missing: "..itemId end
+    local sp = peripheral.wrap(src)
+    if not sp then return false, "cannot wrap "..src end
+    local ok, moved = pcall(function() return sp.pushItems(targetName, srcSlot, 1, targetSlot) end)
+    if not ok or not moved or moved == 0 then
+        return false, "transfer failed "..itemId.." -> "..targetName.."#"..targetSlot
     end
-    if not ok or not n or n==0 then return false,"vault->buf failed" end
-    sleep(0.05)
-    local bs=nil; for s in pairs(buf.list()) do bs=s; break end
-    if not bs then return false,"item lost in buffer" end
-    local ok2,n2
-    if targetSlot then ok2,n2=pcall(function() return buf.pushItems(targetName,bs,n,targetSlot) end)
-    else ok2,n2=pcall(function() return buf.pushItems(targetName,bs,n) end) end
-    if not ok2 or not n2 or n2==0 then return false,"buf->target failed" end
-    return true,n2
+    return true, moved
 end
 
-function flushToVault(periphName)
-    local p=peripheral.wrap(periphName)
-    if not p or not p.list then return end
-    local buf=peripheral.wrap(BUFFER_NAME); if not buf then return end
-    local pShort=periphName:match("depot_%d+") or periphName:match("barrel_%d+")
-               or periphName:match("([^:]+)$") or periphName
-    for slot,item in pairs(p.list()) do
-        local ok,n=pcall(function() return buf.pullItems(pShort,slot,item.count) end)
-        if ok and n and n>0 then
-            sleep(0.05)
-            for bs in pairs(buf.list()) do
-                for _,vn in ipairs(VAULT_NAMES) do
-                    local vault=peripheral.wrap(vn)
-                    if vault then pcall(function() vault.pullItems(BUFFER_NAME,bs,n) end) end
-                end
+-- Pull all items from a peripheral (output barrel) into the vault.
+function moveToVault(periphName)
+    if not CONFIG.vault or CONFIG.vault == "" then return end
+    local vault = peripheral.wrap(CONFIG.vault)
+    local src = peripheral.wrap(periphName)
+    if not vault or not src then return end
+    local moved = 0
+    for slot, item in pairs(src.list()) do
+        local ok, n = pcall(function() return vault.pullItems(periphName, slot, item.count) end)
+        if ok and n then moved = moved + n end
+        sleep(0.05)
+    end
+    if moved > 0 then log("  → vault: "..moved.." items moved","ok") end
+end
+
+function clearCrafter(crafterName)
+    local cr = peripheral.wrap(crafterName)
+    if not cr then return end
+    for slot in pairs(cr.list()) do
+        pcall(function() cr.pushItems(crafterName, slot, 64) end)
+        -- Crafter has no own inventory to dump into; eject into first output barrel
+        for _, c in ipairs(CONFIG.crafters or {}) do
+            if c.crafter == crafterName and c.outputs and c.outputs[1] and c.outputs[1] ~= "" then
+                pcall(function() cr.pushItems(c.outputs[1], slot, 64) end)
                 break
             end
         end
@@ -253,306 +283,281 @@ function flushToVault(periphName)
     end
 end
 
-function clearCrafter()
-    local cr=peripheral.wrap(CRAFTER_NAME); if not cr then return end
-    for slot in pairs(cr.list()) do
-        pcall(function() cr.pushItems(BUFFER_NAME,slot,64) end); sleep(0.05)
-        local buf=peripheral.wrap(BUFFER_NAME)
-        if buf then
-            for bs in pairs(buf.list()) do
-                for _,vn in ipairs(VAULT_NAMES) do
-                    local v=peripheral.wrap(vn)
-                    if v then pcall(function() v.pullItems(BUFFER_NAME,bs,64) end) end
-                end
-                break
-            end
-        end
+-- ══ Redstone pulse on the crafter ═════════════════════════════════════════
+-- The crafter is a peripheral; we pulse it via the computer's side facing it
+-- (redstoneSide) or via a redstone_relay peripheral (redstonePeripheral).
+local function waitTicks(seconds)
+    local id = os.startTimer(seconds)
+    while true do
+        local event, timerId = os.pullEvent("timer")
+        if timerId == id then break end
     end
 end
 
--- ══ Craft execution ═══════════════════════════════════════════════════════
-function runCrafterRecipe(job,grid)
-    local crafter=peripheral.wrap(CRAFTER_NAME)
-    if not crafter then
-        local msg="crafter '"..CRAFTER_NAME.."' not found! Peripherals: "
-                  ..table.concat(peripheral.getNames(),", ")
-        log(msg,"error"); flushLog(); return false,msg
+function pulseCraft(c)
+    local side = c.redstoneSide or "left"
+    if c.redstonePeripheral and c.redstonePeripheral ~= "" then
+        local relay = peripheral.wrap(c.redstonePeripheral)
+        if relay and relay.setOutput then
+            relay.setOutput(side, true); waitTicks(0.05); relay.setOutput(side, false)
+            waitTicks(0.1); return
+        end
+        log("WARN: relay "..c.redstonePeripheral.." missing setOutput","warn")
     end
-    local output=peripheral.wrap(OUTPUT_NAME)
-    if not output then
-        log("[FAIL] barrel '"..OUTPUT_NAME.."' not found!","error")
-        local all={}; for _,n in ipairs(peripheral.getNames()) do
-            table.insert(all,n.."("..peripheral.getType(n)..")") end
-        log("Peripherals: "..table.concat(all,", "),"warn"); flushLog()
-        return false,"barrel not found"
+    pcall(function() redstone.setOutput(side, true) end)
+    waitTicks(0.05)
+    pcall(function() redstone.setOutput(side, false) end)
+    waitTicks(0.1)
+end
+
+-- ══ Recipe fetch (grid comes pre-built from server) ═══════════════════════
+function getRecipe(itemId)
+    local d = httpGet("/api/recipes/" .. itemId:gsub(":", "__"))
+    if d and d.recipes then
+        for _, r in ipairs(d.recipes) do
+            if r.craft and r.craft.grid and r.craft.mode == "crafter" then
+                -- Prefer a crafter-mode recipe with a real grid
+                local filled = 0
+                for i = 1, 9 do if r.craft.grid[i] then filled = filled + 1 end end
+                if filled > 0 then return r end
+            end
+        end
+        -- Fallback: first recipe of any kind
+        if #d.recipes > 0 then return d.recipes[1] end
+    end
+    return nil
+end
+
+-- ══ Craft execution for one crafter ═══════════════════════════════════════
+function runCraft(job, c)
+    local recipe = getRecipe(job.itemId)
+    if not recipe or not recipe.craft or not recipe.craft.grid then
+        return false, "no crafter recipe for "..job.itemId
+    end
+    if recipe.craft.mode ~= "crafter" then
+        return false, "recipe mode '"..(recipe.craft.mode or "?").."' not supported by vanilla crafter"
     end
 
-    local totalCrafted=0
-    log("Crafter="..CRAFTER_NAME.." Output="..OUTPUT_NAME)
+    local grid = recipe.craft.grid
+    local resultCount = recipe.craft.resultCount or 1
+    local passes = math.ceil(job.amount / resultCount)
+    local crafterName = c.crafter
+    local outBarrels = {}
+    for _, b in ipairs(c.outputs or {}) do if b and b ~= "" then outBarrels[#outBarrels+1] = b end end
+    if #outBarrels == 0 then return false, "no output barrels configured for crafter "..crafterName end
 
-    for pass=1,job.amount do
-        log("Pass "..pass.."/"..job.amount,"yellow")
-        clearCrafter()
+    local cr = peripheral.wrap(crafterName)
+    if not cr then return false, "cannot wrap crafter "..crafterName end
 
-        -- Fill slots
-        for slotIdx=1,9 do
-            if grid[slotIdx] then
-                local itemId=grid[slotIdx]
-                local src,srcSlot=findItem(itemId)
-                if not src then
-                    log("[FAIL] missing: "..itemId,"error"); flushLog()
-                    clearCrafter(); return false,"missing: "..itemId
-                end
-                log("  slot "..slotIdx.." <- "..(itemId:match(":(.+)") or itemId).." from "..src)
-                local ok,n=moveViaBuffer(src,srcSlot,1,CRAFTER_NAME,slotIdx)
+    log("["..crafterName.."] "..passes.." passes × "..resultCount.." = "..job.amount.."x "..job.itemId, "yellow")
+
+    local totalCrafted = 0
+    for pass = 1, passes do
+        log("  pass "..pass.."/"..passes)
+        clearCrafter(crafterName)
+
+        -- Load the 9 slots
+        for slotIdx = 1, 9 do
+            local itemId = grid[slotIdx]
+            if itemId then
+                local ok, err = moveItemToSlot(crafterName, slotIdx, itemId)
                 if not ok then
-                    log("[FAIL] slot "..slotIdx.." transfer: "..(n or "?"),"error"); flushLog()
-                    clearCrafter(); return false,"transfer failed slot "..slotIdx
+                    clearCrafter(crafterName)
+                    return false, err
                 end
-                sleep(0.15)
+                log("    slot "..slotIdx.." <- "..itemId)
+                sleep(0.1)
             end
         end
 
-        -- Verify
-        local cnt=0; for _ in pairs(crafter.list()) do cnt=cnt+1 end
-        log("Crafter filled: "..cnt.." slots")
-        if cnt==0 then
-            log("[FAIL] crafter empty after fill!","error"); flushLog()
-            return false,"crafter empty after fill"
-        end
+        -- Verify fill
+        local filled = 0
+        for _ in pairs(cr.list()) do filled = filled + 1 end
+        if filled == 0 then return false, "crafter empty after fill" end
 
-        -- Redstone pulse
-        log("RS pulse -> "..REDSTONE_SIDE)
-        local rsOk,rsErr=pcall(function() redstone.setOutput(REDSTONE_SIDE,true) end)
-        if not rsOk then log("[WARN] RS error: "..tostring(rsErr),"warn") end
-        sleep(0.5)
-        pcall(function() redstone.setOutput(REDSTONE_SIDE,false) end)
+        -- Pulse
+        log("    RS pulse -> "..(c.redstonePeripheral ~= "" and c.redstonePeripheral or (c.redstoneSide or "left")))
+        pulseCraft(c)
 
-        -- Wait up to 6s for output
-        local got=false; local crafterCleared=false
-        log("Waiting output in "..OUTPUT_NAME.."...")
-        for t=1,12 do
+        -- Wait for output in any output barrel
+        local got = false
+        for t = 1, 12 do
             sleep(0.5)
-            -- Check barrel
-            local ok2,outItems=pcall(function() return output.list() end)
-            if ok2 and outItems then
-                for _,itm in pairs(outItems) do
-                    if itm.name==job.itemId then
-                        totalCrafted=totalCrafted+itm.count
-                        log("GOT "..itm.count.."x "..itm.name,"ok"); got=true; break
-                    end
-                end
-            end
-            if got then break end
-            -- Check if crafter cleared
-            local ok3,cItems=pcall(function() return crafter.list() end)
-            if ok3 and cItems then
-                local full=false; for _ in pairs(cItems) do full=true; break end
-                if not full and not crafterCleared then
-                    crafterCleared=true
-                    log("Crafter fired at "..tostring(t*0.5).."s, waiting hopper...")
-                end
-            end
-            if crafterCleared and t>=4 then
-                local ok4,out2=pcall(function() return output.list() end)
-                if ok4 and out2 then
-                    for _,itm in pairs(out2) do
-                        totalCrafted=totalCrafted+itm.count
-                        log("GOT "..itm.count.."x "..itm.name.." (hopper)","ok"); got=true; break
+            for _, ob in ipairs(outBarrels) do
+                local bp = peripheral.wrap(ob)
+                if bp then
+                    for _, itm in pairs(bp.list()) do
+                        if itm.name == job.itemId then
+                            totalCrafted = totalCrafted + itm.count
+                            log("    GOT "..itm.count.."x "..itm.name, "ok")
+                            got = true; break
+                        end
                     end
                 end
                 if got then break end
             end
+            if got then break end
         end
 
         if not got then
-            log("[WARN] no output after 6s","warn")
-            local ok5,out3=pcall(function() return output.list() end)
-            if ok5 and out3 then
-                local contents={}
-                for _,itm in pairs(out3) do table.insert(contents,itm.name.."x"..itm.count) end
-                log("Barrel has: "..(#contents>0 and table.concat(contents,", ") or "EMPTY"),"warn")
-            end
-            if crafterCleared then
-                log("Crafter fired, output may be elsewhere - continuing","warn"); got=true end
+            log("    WARN: no output after 6s, continuing", "warn")
         end
 
         flushLog()
-        flushToVault(OUTPUT_NAME); sleep(0.1)
+        -- Move output barrel(s) → vault
+        if CONFIG.autoMoveToVault then
+            for _, ob in ipairs(outBarrels) do moveToVault(ob) end
+        end
+        sleep(0.1)
     end
 
-    log("Done: "..totalCrafted.."x "..job.itemId,"ok"); flushLog()
+    log("["..crafterName.."] DONE: "..totalCrafted.."x "..job.itemId, "ok")
+    flushLog()
     return true
 end
 
-function runPressRecipe(job,grid)
-    local itemId=grid[5]
-    if not itemId then return false,"no ingredient in press recipe" end
-    local depotName=nil
-    for _,dn in ipairs(PRESS_DEPOTS) do
-        local p=peripheral.wrap(dn)
-        if p and p.list then
-            local empty=true; for _ in pairs(p.list()) do empty=false; break end
-            if empty then depotName=dn; break end
-        end
-    end
-    if not depotName then return false,"no free press depot" end
-    log("Press depot: "..depotName)
-    for pass=1,job.amount do
-        log("Pass "..pass.."/"..job.amount,"yellow")
-        local src,srcSlot=findItem(itemId)
-        if not src then flushLog(); return false,"missing: "..itemId end
-        local ok,n=moveViaBuffer(src,srcSlot,1,depotName)
-        if not ok then flushLog(); return false,"transfer failed: "..(n or "?") end
-        local depot=peripheral.wrap(depotName); local done=false
-        for t=1,20 do
-            sleep(0.5)
-            if depot and depot.list then
-                for _,itm in pairs(depot.list()) do
-                    if itm.name==job.itemId then
-                        log("GOT "..itm.count.."x "..itm.name,"ok"); done=true; break end
+-- ══ Worker: one per crafter ═══════════════════════════════════════════════
+function makeWorker(c)
+    return function()
+        sleep(1 + c.id * 0.5)  -- stagger startup to avoid 4 simultaneous queue polls
+        log("Worker #"..c.id.." started: "..c.crafter, "cyan")
+        while true do
+            local ok, data = pcall(httpGet, "/api/queue/next?crafterId="..c.id)
+            if ok and data and data.job then
+                local job = data.job
+                log("["..c.crafter.."] JOB #"..job.id.." "..job.amount.."x "..job.itemId, "cyan")
+                local success, err = pcall(function()
+                    local rok, rerr = runCraft(job, c)
+                    if rok then
+                        httpPost("/api/queue/"..job.id.."/complete", {})
+                        log("["..c.crafter.."] JOB #"..job.id.." COMPLETED", "ok")
+                    else
+                        httpPost("/api/queue/"..job.id.."/fail", { error = rerr or "unknown" })
+                        log("["..c.crafter.."] JOB #"..job.id.." FAILED: "..(rerr or "?"), "error")
+                    end
+                end)
+                if not ok then
+                    httpPost("/api/queue/"..job.id.."/fail", { error = tostring(err) })
+                    log("["..c.crafter.."] JOB #"..job.id.." CRASH: "..tostring(err), "error")
                 end
+                flushLog()
             end
-            if done then break end
-        end
-        if not done then log("[WARN] no press output after 10s","warn") end
-        flushToVault(depotName); sleep(0.1)
-    end
-    flushLog(); return true
-end
-
-function executeJob(job)
-    log("=== JOB #"..job.id.." "..job.amount.."x "..job.itemId.." ===","cyan")
-    local recipe=getRecipe(job.itemId)
-    if not recipe then
-        local msg="no recipe for "..job.itemId
-        log(msg,"error"); flushLog(); return false,msg
-    end
-    log("Recipe: "..recipe.type)
-    local grid,mode=parseGrid(recipe)
-    if not grid or mode=="unknown" then
-        local msg="unsupported recipe type: "..recipe.type
-        log(msg,"error"); flushLog(); return false,msg
-    end
-    -- Result count per craft
-    local resultCount=1
-    if recipe.data then
-        local r=recipe.data.result
-        if type(r)=="table" and r.count then resultCount=r.count
-        elseif recipe.data.results and recipe.data.results[1] then
-            local r2=recipe.data.results[1]
-            if type(r2)=="table" and r2.count then resultCount=r2.count end
+            -- wait before next poll
+            local tid = os.startTimer(CRAFTER_POLL_INTERVAL)
+            while true do
+                local _, id = os.pullEvent("timer")
+                if id == tid then break end
+            end
         end
     end
-    if recipe.resultCount then resultCount=recipe.resultCount end
-    local passes=math.ceil(job.amount/resultCount)
-    log("Result/craft: "..resultCount.." | Passes needed: "..passes)
-    -- Show grid
-    for row=1,3 do
-        local line=""
-        for col=1,3 do
-            local v=grid[(row-1)*3+col]
-            line=line.."["..(v and (v:match(":(.+)") or v):sub(1,7) or "  ---  ").."]"
-        end
-        log(line)
-    end
-    local jobP={id=job.id,itemId=job.itemId,amount=passes}
-    if mode=="crafter" then return runCrafterRecipe(jobP,grid)
-    else return runPressRecipe(jobP,grid) end
 end
 
--- ══ Display ════════════════════════════════════════════════════════════════
-local lastStats={totalItems=0,totalStacks=0,storageDevices=0}
-local lastOnline=false; local craftCount=0
-
-function redraw()
-    term.setBackgroundColor(colors.black); term.clear(); term.setCursorPos(1,1)
-    term.setBackgroundColor(colors.gray); term.setTextColor(colors.white)
-    term.clearLine(); term.write("  ME TERMINAL v3.1 — LIVE LOG ON WEBSITE  ")
-    term.setBackgroundColor(colors.black)
-    term.setCursorPos(1,3); term.setTextColor(colors.yellow)
-    print("Storage : "..lastStats.storageDevices.." devices")
-    term.setTextColor(colors.cyan)
-    print("Items   : "..lastStats.totalItems.." | Stacks: "..lastStats.totalStacks)
-    term.setCursorPos(1,6)
-    if lastOnline then term.setTextColor(colors.lime); print("API     : ONLINE")
-    else term.setTextColor(colors.red); print("API     : OFFLINE") end
-    term.setTextColor(colors.white); term.setCursorPos(1,8)
-    print("Crafted : "..craftCount.." jobs done")
-    term.setCursorPos(1,10); term.setTextColor(colors.lightBlue)
-    print(API_URL.."/crafts.html  (CC Log tab)")
-    term.setCursorPos(1,12); term.setTextColor(colors.white)
-    print("R=rescan  Ctrl+T=stop")
-end
-
--- ══ Event loop ═════════════════════════════════════════════════════════════
-local timerOwner={}
+-- ══ Inventory sync task ═══════════════════════════════════════════════════
+local lastStats = { totalItems=0, totalStacks=0, storageDevices=0 }
 
 function taskInventorySync()
-    local inv,stats=scanInventory()
-    lastOnline=pcall(function() pushInventory(inv,stats) end)
-    lastStats=stats; redraw()
+    local inv, stats = scanInventory()
+    lastStats = stats
+    pcall(pushInventory, inv, stats)
+    redraw()
     while true do
-        local tid=os.startTimer(SYNC_INTERVAL); timerOwner[tid]="sync"
+        local tid = os.startTimer(SYNC_INTERVAL)
         while true do
-            local _,id=os.pullEvent("timer")
-            if timerOwner[id]=="sync" then timerOwner[id]=nil; break end
+            local _, id = os.pullEvent("timer")
+            if id == tid then break end
         end
-        local inv2,stats2=scanInventory(); lastStats=stats2
-        lastOnline=pcall(function() pushInventory(inv2,stats2) end)
+        local inv2, stats2 = scanInventory()
+        lastStats = stats2
+        pcall(pushInventory, inv2, stats2)
         redraw()
     end
 end
 
-function taskCraftQueue()
-    sleep(1)
+-- ══ Peripheral report task ════════════════════════════════════════════════
+function taskPeriphReport()
     while true do
-        local tid=os.startTimer(3); timerOwner[tid]="craft"
+        local n = reportPeripherals()
+        log("Peripherals reported: "..n)
+        local tid = os.startTimer(PERIPH_REPORT_INTERVAL)
         while true do
-            local _,id=os.pullEvent("timer")
-            if timerOwner[id]=="craft" then timerOwner[id]=nil; break end
-        end
-        local job=getNextJob()
-        if job then
-            log("NEW JOB #"..job.id.." "..job.amount.."x "..job.itemId,"cyan")
-            local ok,err=executeJob(job)
-            if ok then
-                craftCount=craftCount+1; reportDone(job.id,true)
-                log("JOB #"..job.id.." COMPLETED","ok")
-            else
-                reportDone(job.id,false,err)
-                log("JOB #"..job.id.." FAILED: "..(err or "?"),"error")
-            end
-            flushLog(); redraw()
+            local _, id = os.pullEvent("timer")
+            if id == tid then break end
         end
     end
+end
+
+-- ══ Display ═══════════════════════════════════════════════════════════════
+local craftCount = 0
+
+function redraw()
+    term.setBackgroundColor(colors.black); term.clear(); term.setCursorPos(1,1)
+    term.setBackgroundColor(colors.gray); term.setTextColor(colors.white)
+    term.clearLine(); term.write("  ME TERMINAL v4.0 — 4-CRAFTER  ")
+    term.setBackgroundColor(colors.black)
+    term.setCursorPos(1,3); term.setTextColor(colors.yellow)
+    print("Storage  : "..lastStats.storageDevices.." devices")
+    term.setTextColor(colors.cyan)
+    print("Items    : "..lastStats.totalItems.." | Stacks: "..lastStats.totalStacks)
+    term.setCursorPos(1,5); term.setTextColor(colors.lime)
+    print("Crafters : "..#CONFIG.crafters.." configured")
+    local y = 6
+    for _, c in ipairs(CONFIG.crafters) do
+        if c.crafter and c.crafter ~= "" then
+            term.setTextColor(c.enabled and colors.lime or colors.gray)
+            print("  #"..c.id.." "..c.crafter..(c.enabled and " [ON]" or " [off]"))
+            y = y + 1
+        end
+    end
+    term.setCursorPos(1, y+1); term.setTextColor(colors.lightBlue)
+    print(API_URL.."/crafts.html")
+    term.setCursorPos(1, y+3); term.setTextColor(colors.white)
+    print("R=rescan  Ctrl+T=stop")
 end
 
 function taskInput()
     while true do
-        local _,key=os.pullEvent("key")
-        if key==keys.r then
-            local inv,stats=scanInventory(); lastStats=stats
-            pcall(function() pushInventory(inv,stats) end); redraw()
+        local _, key = os.pullEvent("key")
+        if key == keys.r then
+            local inv, stats = scanInventory()
+            lastStats = stats
+            pcall(pushInventory, inv, stats)
+            redraw()
         end
     end
 end
 
--- ══ Startup ════════════════════════════════════════════════════════════════
-term.setBackgroundColor(colors.black); term.clear()
-term.setCursorPos(1,1); term.setTextColor(colors.yellow)
-print("ME Terminal v3.1 starting...")
-print("Logs appear at: "..API_URL.."/crafts.html")
+-- ══ Startup ═══════════════════════════════════════════════════════════════
+term.setBackgroundColor(colors.black); term.clear(); term.setCursorPos(1,1)
+term.setTextColor(colors.yellow)
+print("ME Terminal v4.0 starting...")
+print("Logs: "..API_URL.."/crafts.html (CC Log tab)")
 print("Testing connection...")
 
-local ok=pcall(function()
-    local r=http.get(API_URL.."/api/stats",HEADERS)
+local ok = pcall(function()
+    local r = http.get(API_URL.."/api/stats", HEADERS)
     if r then r.close() else error("no response") end
 end)
 if not ok then
     term.setTextColor(colors.red)
-    print("ERROR: Cannot connect to API!"); return
+    print("ERROR: Cannot connect to API! Check API_URL.")
+    return
 end
 term.setTextColor(colors.lime); print("Connected!")
-sleep(1)
-parallel.waitForAny(taskInventorySync,taskCraftQueue,taskInput)
+sleep(0.5)
+
+loadConfig()
+reportPeripherals()
+
+-- Build worker tasks only for enabled, configured crafters
+local tasks = { taskInventorySync, taskPeriphReport, taskInput }
+for _, c in ipairs(CONFIG.crafters) do
+    if c.enabled and c.crafter and c.crafter ~= "" then
+        tasks[#tasks+1] = makeWorker(c)
+    end
+end
+
+if #tasks == 3 then
+    log("WARN: no crafters enabled/configured — set them up in Craft Manager → Setup", "warn")
+end
+
+parallel.waitForAll(table.unpack(tasks))

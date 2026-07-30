@@ -86,21 +86,23 @@ async function loadInventory() {
     try {
         const response = await fetch(`${API_URL}/api/inventory`);
         const data = await response.json();
-        
+
         if (data.online) {
-            // Live inventory from ComputerCraft
-            inventory = data.items || [];
+            // Live inventory from ComputerCraft.
+            // Note: items may legitimately be an empty array (empty storage) — that is
+            // NOT the same as CC being offline, so we must not fall back here.
+            inventory = Array.isArray(data.items) ? data.items : [];
+            console.log(`[inventory] online, ${inventory.length} items, totalItems=${data.stats?.totalItems ?? '?'}`);
             updateStatus(true, data);
             renderInventory();
         } else {
-            // Fallback: show all craftable items from recipes
-            console.log('CC offline, loading craftable items...');
+            // CC truly offline — fall back to showing craftable items from recipes
+            console.log('[inventory] CC offline, loading craftable items...');
             await loadCraftableItemsAsInventory();
             updateStatus(false);
         }
     } catch (error) {
         console.error('Error loading inventory:', error);
-        // Fallback to craftable items
         await loadCraftableItemsAsInventory();
         updateStatus(false);
     }
