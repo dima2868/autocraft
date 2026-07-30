@@ -5,15 +5,13 @@
 -- Output barrel → (optional) item_vault as final storage
 -- ══════════════════════════════════════════════════════════════════════════
 
-local API_URL = "https://me-terminal-production.up.railway.app"  -- ← change to your URL
+local API_URL = "https://autocraft-production.up.railway.app"  -- ← change to your URL
 local SYNC_INTERVAL = 2          -- inventory push every N seconds
 local PERIPH_REPORT_INTERVAL = 10 -- peripheral report every N seconds
 local CRAFTER_POLL_INTERVAL = 3   -- each worker polls queue every N seconds
 
 local HEADERS = {
-    ["Content-Type"]="application/json",
-    ["bypass-tunnel-reminder"]="true",
-    ["ngrok-skip-browser-warning"]="true"
+    ["Content-Type"]="application/json"
 }
 
 -- Runtime config (fetched from /api/config)
@@ -531,15 +529,20 @@ term.setBackgroundColor(colors.black); term.clear(); term.setCursorPos(1,1)
 term.setTextColor(colors.yellow)
 print("ME Terminal v4.0 starting...")
 print("Logs: "..API_URL.."/crafts.html (CC Log tab)")
-print("Testing connection...")
+print("Testing connection to "..API_URL)
 
-local ok = pcall(function()
-    local r = http.get(API_URL.."/api/stats", HEADERS)
-    if r then r.close() else error("no response") end
+local ok, connErr = pcall(function()
+    local r, e = http.get(API_URL.."/api/stats", HEADERS)
+    if not r then error(e or "no response object") end
+    local body = r.readAll(); r.close()
+    if not body or #body == 0 then error("empty response") end
 end)
 if not ok then
     term.setTextColor(colors.red)
-    print("ERROR: Cannot connect to API! Check API_URL.")
+    print("ERROR: Cannot connect to API!")
+    print("Reason: "..tostring(connErr))
+    print("URL: "..API_URL)
+    print("Try in CC prompt: http.get(\""..API_URL.."/api/stats\")")
     return
 end
 term.setTextColor(colors.lime); print("Connected!")
