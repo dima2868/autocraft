@@ -239,12 +239,16 @@ end
 -- ══ Transfer helpers ═════════════════════════════════════════════════════
 -- Move 1 item from storage into a target crafter slot.
 function moveItemToSlot(targetName, targetSlot, itemId)
-    local src, srcSlot = findItem(itemId)
-    if not src then return false, "missing: "..itemId end
+    local src, srcSlot, avail = findItem(itemId)
+    if not src then
+        log("    ! NOT FOUND: "..itemId, "error")
+        return false, "missing: "..itemId
+    end
     local sp = peripheral.wrap(src)
     if not sp then return false, "cannot wrap "..src end
     local ok, moved = pcall(function() return sp.pushItems(targetName, srcSlot, 1, targetSlot) end)
     if not ok or not moved or moved == 0 then
+        log("    ! transfer failed "..itemId.." ("..src.."#"..srcSlot.." -> "..targetName.."#"..targetSlot..")", "error")
         return false, "transfer failed "..itemId.." -> "..targetName.."#"..targetSlot
     end
     return true, moved
@@ -328,9 +332,13 @@ end
 
 -- ══ Craft execution for one crafter ═══════════════════════════════════════
 function runCraft(job, c)
+    log("["..c.crafter.."] runCraft start: "..job.itemId, "yellow")
     local recipe = getRecipe(job.itemId)
-    if not recipe or not recipe.craft or not recipe.craft.grid then
-        return false, "no crafter recipe for "..job.itemId
+    if not recipe then
+        return false, "no recipe found for "..job.itemId
+    end
+    if not recipe.craft or not recipe.craft.grid then
+        return false, "recipe has no craft.grid for "..job.itemId
     end
     if recipe.craft.mode ~= "crafter" then
         return false, "recipe mode '"..(recipe.craft.mode or "?").."' not supported by vanilla crafter"
@@ -342,7 +350,13 @@ function runCraft(job, c)
     local crafterName = c.crafter
     local outBarrels = {}
     for _, b in ipairs(c.outputs or {}) do if b and b ~= "" then outBarrels[#outBarrels+1] = b end end
-    if #outBarrels == 0 then return false, "no output barrels configured for crafter "..crafterName end
+    local inBarrels = {}
+    for _, b in ipairs(c.inputs or {}) do if b and b ~= "" then inBarrels[#inBarrels+1] = b end end
+
+    log("  config: "..#inBarrels.." input barrels, "..#outBarrels.." output barrels")
+    if #outBarrels == 0 then
+        return false, "no output barrels configured for crafter "..crafterName
+    end
 
     local cr = peripheral.wrap(crafterName)
     if not cr then return false, "cannot wrap crafter "..crafterName end
@@ -419,11 +433,15 @@ function makeWorker(c)
     return function()
         sleep(1 + c.id * 0.5)  -- stagger startup to avoid 4 simultaneous queue polls
         log("Worker #"..c.id.." started: "..c.crafter, "cyan")
+        flushLog()
         while true do
             local ok, data = pcall(httpGet, "/api/queue/next?crafterId="..c.id)
-            if ok and data and data.job then
+            if not ok then
+                log("[W"..c.id.."] queue poll error: "..tostring(data), "warn")
+            elseif data and data.job then
                 local job = data.job
                 log("["..c.crafter.."] JOB #"..job.id.." "..job.amount.."x "..job.itemId, "cyan")
+                flushLog()
                 local success, err = pcall(function()
                     local rok, rerr = runCraft(job, c)
                     if rok then
@@ -434,8 +452,8 @@ function makeWorker(c)
                         log("["..c.crafter.."] JOB #"..job.id.." FAILED: "..(rerr or "?"), "error")
                     end
                 end)
-                if not ok then
-                    httpPost("/api/queue/"..job.id.."/fail", { error = tostring(err) })
+                if not success then
+                    pcall(httpPost, "/api/queue/"..job.id.."/fail", { error = tostring(err) })
                     log("["..c.crafter.."] JOB #"..job.id.." CRASH: "..tostring(err), "error")
                 end
                 flushLog()
