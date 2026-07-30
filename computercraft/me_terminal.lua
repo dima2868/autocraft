@@ -350,16 +350,15 @@ function runCraft(job, c)
     local crafterName = c.crafter
     local outBarrels = {}
     for _, b in ipairs(c.outputs or {}) do if b and b ~= "" then outBarrels[#outBarrels+1] = b end end
-    local inBarrels = {}
-    for _, b in ipairs(c.inputs or {}) do if b and b ~= "" then inBarrels[#inBarrels+1] = b end end
 
-    log("  config: "..#inBarrels.." input barrels, "..#outBarrels.." output barrels")
     if #outBarrels == 0 then
-        return false, "no output barrels configured for crafter "..crafterName
+        return false, "no output barrel configured for crafter "..crafterName
     end
 
     local cr = peripheral.wrap(crafterName)
     if not cr then return false, "cannot wrap crafter "..crafterName end
+
+    log("["..crafterName.."] "..passes.." passes x "..resultCount.." = "..job.amount.."x "..job.itemId, "yellow")
 
     log("["..crafterName.."] "..passes.." passes × "..resultCount.." = "..job.amount.."x "..job.itemId, "yellow")
 

@@ -120,7 +120,7 @@ function renderSetup() {
     hwConfig.crafters = hwConfig.crafters || [];
     while (hwConfig.crafters.length < 4) {
       const i = hwConfig.crafters.length;
-      hwConfig.crafters.push({ id:i+1, crafter:'', redstoneSide:'left', redstonePeripheral:'', inputs:['',''], outputs:['',''], enabled: i===0 });
+      hwConfig.crafters.push({ id:i+1, crafter:'', redstoneSide:'left', redstonePeripheral:'', outputs:['',''], enabled: i===0 });
     }
   }
 
@@ -140,7 +140,7 @@ function renderSetup() {
         </div>
       </div>
       <div class="setup-field">
-        <label>Autocrafter (minecraft:autocrafter_N)</label>
+        <label>Autocrafter (minecraft:crafter_N)</label>
         <select onchange="hwConfig.crafters[${i}].crafter=this.value; renderSetup();">${periphSelect(c.crafter,'crafter','— select crafter —')}</select>
       </div>
       <div class="setup-row-2">
@@ -153,15 +153,8 @@ function renderSetup() {
           <select onchange="hwConfig.crafters[${i}].redstonePeripheral=this.value;">${periphSelect(c.redstonePeripheral||'','relay','— direct side —')}</select>
         </div>
       </div>
-      <div class="setup-field">
-        <div class="barrel-pair-label">Input barrels <span class="tag in">IN</span></div>
-        <div class="setup-row-2">
-          <select onchange="hwConfig.crafters[${i}].inputs[0]=this.value;">${periphSelect((c.inputs||['',''])[0],'barrel','— barrel 1 —')}</select>
-          <select onchange="hwConfig.crafters[${i}].inputs[1]=this.value;">${periphSelect((c.inputs||['',''])[1],'barrel','— barrel 2 —')}</select>
-        </div>
-      </div>
       <div class="setup-field" style="margin-bottom:0">
-        <div class="barrel-pair-label">Output barrels <span class="tag out">OUT</span></div>
+        <div class="barrel-pair-label">Output barrels <span class="tag out">OUT</span> <span style="font-size:8px;color:var(--parchment-faint);margin-left:6px;font-family:'JetBrains Mono',monospace">(items from ME go directly to crafter)</span></div>
         <div class="setup-row-2">
           <select onchange="hwConfig.crafters[${i}].outputs[0]=this.value;">${periphSelect((c.outputs||['',''])[0],'barrel','— barrel 1 —')}</select>
           <select onchange="hwConfig.crafters[${i}].outputs[1]=this.value;">${periphSelect((c.outputs||['',''])[1],'barrel','— barrel 2 —')}</select>

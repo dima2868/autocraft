@@ -48,10 +48,10 @@ const saveLog = () => { try { fs.writeFileSync(LOG_FILE, JSON.stringify(craftLog
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 let config = {
   crafters: [
-    { id: 1, crafter: '', redstoneSide: 'left', redstonePeripheral: '', inputs: ['', ''], outputs: ['', ''], enabled: true },
-    { id: 2, crafter: '', redstoneSide: 'left', redstonePeripheral: '', inputs: ['', ''], outputs: ['', ''], enabled: false },
-    { id: 3, crafter: '', redstoneSide: 'left', redstonePeripheral: '', inputs: ['', ''], outputs: ['', ''], enabled: false },
-    { id: 4, crafter: '', redstoneSide: 'left', redstonePeripheral: '', inputs: ['', ''], outputs: ['', ''], enabled: false },
+    { id: 1, crafter: '', redstoneSide: 'left', redstonePeripheral: '', outputs: ['', ''], enabled: true },
+    { id: 2, crafter: '', redstoneSide: 'left', redstonePeripheral: '', outputs: ['', ''], enabled: false },
+    { id: 3, crafter: '', redstoneSide: 'left', redstonePeripheral: '', outputs: ['', ''], enabled: false },
+    { id: 4, crafter: '', redstoneSide: 'left', redstonePeripheral: '', outputs: ['', ''], enabled: false },
   ],
   vault: '',
   autoMoveToVault: true,
@@ -391,7 +391,6 @@ app.post('/api/config', (req, res) => {
       crafter: String(c.crafter || ''),
       redstoneSide: String(c.redstoneSide || 'left'),
       redstonePeripheral: String(c.redstonePeripheral || ''),
-      inputs: Array.isArray(c.inputs) ? c.inputs.slice(0, 2).map(s => String(s || '')) : ['', ''],
       outputs: Array.isArray(c.outputs) ? c.outputs.slice(0, 2).map(s => String(s || '')) : ['', ''],
       enabled: !!c.enabled,
     }));
